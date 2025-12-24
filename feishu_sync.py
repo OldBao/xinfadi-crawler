@@ -574,15 +574,17 @@ class FeishuSync:
         sheet_id: str,
         start_cell: str = "A1",
         spreadsheet_token: Optional[str] = None,
+        batch_size: int = 4000,  # 飞书单次写入限制约5000行，保守使用4000
     ) -> bool:
         """
-        写入数据到工作表
+        写入数据到工作表（支持分批写入大数据集）
         
         Args:
             data: 二维数组数据
             sheet_id: 工作表ID
             start_cell: 起始单元格
             spreadsheet_token: 电子表格token
+            batch_size: 每批写入的行数
             
         Returns:
             是否成功
@@ -592,8 +594,9 @@ class FeishuSync:
             print("未指定 spreadsheet_token")
             return False
         
-        # 计算范围
-        rows = len(data)
+        if not data:
+            return True
+            
         cols = max(len(row) for row in data) if data else 0
         
         # 将列数转换为字母
@@ -606,30 +609,53 @@ class FeishuSync:
             return result
         
         end_col = col_to_letter(cols)
-        end_row = rows
-        range_str = f"{sheet_id}!{start_cell}:{end_col}{end_row}"
+        
+        # 解析起始单元格
+        import re
+        match = re.match(r'^([A-Z]+)(\d+)$', start_cell.upper())
+        if match:
+            start_row = int(match.group(2))
+        else:
+            start_row = 1
         
         url = f"{self.BASE_URL}/sheets/v2/spreadsheets/{token}/values"
         
-        request_data = {
-            "valueRange": {
-                "range": range_str,
-                "values": data,
-            }
-        }
+        # 分批写入
+        total_rows = len(data)
+        batches = (total_rows + batch_size - 1) // batch_size
         
-        try:
-            response = self.session.put(url, headers=self._get_headers(), json=request_data)
-            result = response.json()
+        for batch_idx in range(batches):
+            batch_start = batch_idx * batch_size
+            batch_end = min((batch_idx + 1) * batch_size, total_rows)
+            batch_data = data[batch_start:batch_end]
             
-            if result.get('code') == 0:
-                return True
-            else:
-                print(f"写入数据失败: {result.get('msg')}")
+            current_start_row = start_row + batch_start
+            current_end_row = start_row + batch_end - 1
+            range_str = f"{sheet_id}!A{current_start_row}:{end_col}{current_end_row}"
+            
+            request_data = {
+                "valueRange": {
+                    "range": range_str,
+                    "values": batch_data,
+                }
+            }
+            
+            try:
+                response = self.session.put(url, headers=self._get_headers(), json=request_data)
+                result = response.json()
+                
+                if result.get('code') != 0:
+                    print(f"写入数据失败 (批次 {batch_idx + 1}/{batches}): {result.get('msg')}")
+                    return False
+                    
+                if batches > 1:
+                    print(f"写入进度: {batch_end}/{total_rows} 行 ({batch_idx + 1}/{batches})")
+                    
+            except Exception as e:
+                print(f"写入数据异常: {e}")
                 return False
-        except Exception as e:
-            print(f"写入数据异常: {e}")
-            return False
+        
+        return True
     
     def upload_dataframe(
         self,

@@ -363,7 +363,7 @@ class XinfadiCrawler:
         end_date: Optional[str] = None,
     ):
         """
-        同步数据到飞书电子表格（每次创建新文件）
+        同步数据到飞书电子表格（每天创建一个新文件）
         
         Args:
             df: 数据DataFrame
@@ -384,7 +384,34 @@ class XinfadiCrawler:
                 print("请先运行: python feishu_sync.py --init")
                 return
             
-            # 生成电子表格文件标题
+            # 检查是否有发布日期列，用于按天分组
+            if "发布日期" in df.columns and not df.empty:
+                # 获取所有唯一日期
+                unique_dates = df["发布日期"].dropna().unique()
+                unique_dates = sorted([str(d) for d in unique_dates])
+                
+                if len(unique_dates) > 1:
+                    # 多天数据，按天分别创建文件
+                    print(f"检测到 {len(unique_dates)} 天的数据，将分别创建文件...")
+                    
+                    success_count = 0
+                    for date in unique_dates:
+                        day_df = df[df["发布日期"] == date]
+                        if day_df.empty:
+                            continue
+                            
+                        file_title = f"新发地价格_{date}"
+                        result = client.upload_dataframe(day_df, file_title, auto_rename=True)
+                        
+                        if result:
+                            success_count += 1
+                        else:
+                            print(f"  {date} 同步失败")
+                    
+                    print(f"\n飞书同步完成! 成功创建 {success_count}/{len(unique_dates)} 个文件")
+                    return
+            
+            # 单天数据或无日期列，创建单个文件
             if start_date and end_date:
                 if start_date == end_date:
                     file_title = f"新发地价格_{start_date}"
